@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { analyzePhoto, groupSimilar, IMAGE_EXT } from './scoring.js'
 import { fbCheckToken, fbSchedulePhoto } from './fb.js'
+import { aiReviewPhoto, KATEGORI_LABEL } from './ai.js'
 
 const LS_FB = 'fotoflow_fb'
+const LS_AI = 'fotoflow_ai'
 const LS_META = 'fotoflow_meta' // judul & jadwal per foto (terpisah dari file)
+
+// Jam tayang saat orang Indonesia paling ramai buka Facebook
+const SLOT_PRESETS = {
+  ramai1: { label: '1 foto/hari — 19:00 (prime time malam)', slots: ['19:00'] },
+  ramai2: { label: '2 foto/hari — 12:00 & 19:30 (jam istirahat + malam)', slots: ['12:00', '19:30'] },
+  ramai3: { label: '3 foto/hari — 11:30, 17:00 & 20:00', slots: ['11:30', '17:00', '20:00'] },
+  gap: { label: 'Jarak tetap antar posting (atur jam sendiri)', slots: null },
+}
 
 const fmtBytes = (b) => b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' KB'
 const pad = (n) => String(n).padStart(2, '0')
@@ -47,13 +57,18 @@ export default function App() {
   const [fbStatus, setFbStatus] = useState(null)
   const [schedBase, setSchedBase] = useState(() => toLocalInput(new Date(Date.now() + 60 * 60 * 1000)))
   const [schedGapH, setSchedGapH] = useState(24)
+  const [schedMode, setSchedMode] = useState('ramai1')
   const [uploadState, setUploadState] = useState(null)
+  const [view, setView] = useState('semua')
+  const [ai, setAi] = useState(() => { try { return JSON.parse(localStorage.getItem(LS_AI)) || { apiKey: '' } } catch { return { apiKey: '' } } })
+  const [aiState, setAiState] = useState(null)
   const cancelRef = useRef(false)
 
   const supported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
   useEffect(() => { localStorage.setItem(LS_META, JSON.stringify(meta)) }, [meta])
   useEffect(() => { localStorage.setItem(LS_FB, JSON.stringify(fb)) }, [fb])
+  useEffect(() => { localStorage.setItem(LS_AI, JSON.stringify(ai)) }, [ai])
 
   const setPhotoMeta = (key, patch) =>
     setMeta((m) => ({ ...m, [key]: { ...(m[key] || {}), ...patch } }))
@@ -88,28 +103,77 @@ export default function App() {
     }
     groupSimilar(results)
     results.sort((a, b) => b.score - a.score)
-    // seleksi awal otomatis: skor >= ambang & juara grupnya
-    for (const p of results) p.selected = p.score >= 60 && p.bestOfGroup
+    // seleksi awal otomatis: skor cukup, juara grupnya, bukan screenshot/dokumen
+    for (const p of results) p.selected = p.score >= 60 && p.bestOfGroup && !p.flags.screenshot && !p.flags.dokumen
     setPhotos(results)
     setProgress(null)
     setStep(2)
   }
 
   function applyAutoSelect(ms = minScore, best = autoBest) {
-    setPhotos((ps) => ps.map((p) => ({ ...p, selected: p.score >= ms && (!best || p.bestOfGroup) })))
+    setPhotos((ps) => ps.map((p) => ({
+      ...p,
+      selected: p.score >= ms && (!best || p.bestOfGroup) && !p.flags.screenshot && !p.flags.dokumen,
+    })))
   }
 
   const selected = useMemo(() => photos.filter((p) => p.selected), [photos])
 
   const toggle = (id) => setPhotos((ps) => ps.map((p) => (p.id === id ? { ...p, selected: !p.selected } : p)))
 
-  // ---- LANGKAH 3: jadwal otomatis -----------------------------------------
+  // ---- LANGKAH 3: jadwal otomatis (jam ramai FB Indonesia) -----------------
   function autoSchedule() {
-    const base = new Date(schedBase)
-    selected.forEach((p, i) => {
-      const t = new Date(base.getTime() + i * schedGapH * 3600 * 1000)
+    const minTime = Date.now() + 15 * 60 * 1000 // aturan FB: minimal 10 menit ke depan
+    if (schedMode === 'gap') {
+      const base = new Date(schedBase)
+      selected.forEach((p, i) => {
+        const t = new Date(Math.max(base.getTime(), minTime) + i * schedGapH * 3600 * 1000)
+        setPhotoMeta(p.id, { jadwal: toLocalInput(t) })
+      })
+      return
+    }
+    const slots = SLOT_PRESETS[schedMode].slots
+    const start = new Date(schedBase); start.setHours(0, 0, 0, 0)
+    let day = 0, si = 0
+    selected.forEach((p) => {
+      let t
+      do {
+        const [hh, mm] = slots[si].split(':').map(Number)
+        t = new Date(start.getTime() + day * 86400000)
+        t.setHours(hh, mm, 0, 0)
+        si++; if (si >= slots.length) { si = 0; day++ }
+      } while (t.getTime() < minTime)
       setPhotoMeta(p.id, { jadwal: toLocalInput(t) })
     })
+  }
+
+  // ---- Pemeriksaan AI: buang foto tak layak + auto caption ------------------
+  async function runAi() {
+    const key = ai.apiKey.trim()
+    if (!key) { alert('Isi dulu API key Claude (console.anthropic.com).'); return }
+    const list = selected
+    if (!list.length) return
+    setAiState({ done: 0, total: list.length, drop: 0, log: [] })
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i]
+      try {
+        const file = await p.handle.getFile()
+        const r = await aiReviewPhoto({ apiKey: key, file })
+        setMeta((m) => {
+          const cur = m[p.id] || {}
+          return { ...m, [p.id]: { ...cur, ai: r, judul: cur.judul || r.caption || '' } }
+        })
+        if (!r.layak) {
+          setPhotos((ps) => ps.map((x) => (x.id === p.id ? { ...x, selected: false } : x)))
+          setAiState((s) => ({ ...s, done: i + 1, drop: s.drop + 1, log: [...s.log, { name: p.name, ok: false, msg: `dibuang — ${KATEGORI_LABEL[r.kategori] || r.kategori}: ${r.alasan}` }] }))
+        } else {
+          setAiState((s) => ({ ...s, done: i + 1, log: [...s.log, { name: p.name, ok: true, msg: r.caption ? 'layak ✓ caption dibuat' : 'layak ✓' }] }))
+        }
+      } catch (e) {
+        setAiState((s) => ({ ...s, done: i + 1, log: [...s.log, { name: p.name, ok: false, msg: `error: ${e.message}` }] }))
+      }
+    }
+    setAiState((s) => ({ ...s, finished: true }))
   }
 
   // ---- LANGKAH 4: salin file asli ke folder output -------------------------
@@ -130,6 +194,7 @@ export default function App() {
         manifest.push({
           file: outName, asli: p.path, skor: p.score,
           judul: meta[p.id]?.judul || '', jadwal: meta[p.id]?.jadwal || '',
+          ai: meta[p.id]?.ai ? { kategori: meta[p.id].ai.kategori, alasan: meta[p.id].ai.alasan } : null,
           ketajaman: p.sharpness, eksposur: p.exposure, warna: p.color,
           resolusi: `${p.width}x${p.height}`,
         })
@@ -220,7 +285,11 @@ export default function App() {
       {step === 2 && (
         <section>
           <div className="toolbar">
-            <div><b>{photos.length}</b> foto · terpilih <b className="hl">{selected.length}</b></div>
+            <div className="tabs">
+              <button className={view === 'semua' ? 'on' : ''} onClick={() => setView('semua')}>Semua ({photos.length})</button>
+              <button className={view === 'terpilih' ? 'on' : ''} onClick={() => setView('terpilih')}>✓ Terpilih ({selected.length})</button>
+              <button className={view === 'dibuang' ? 'on' : ''} onClick={() => setView('dibuang')}>Dibuang ({photos.length - selected.length})</button>
+            </div>
             <label>Skor minimal <input type="range" min="0" max="95" value={minScore}
               onChange={(e) => { const v = +e.target.value; setMinScore(v); applyAutoSelect(v, autoBest) }} /> <b>{minScore}</b></label>
             <label><input type="checkbox" checked={autoBest}
@@ -230,8 +299,11 @@ export default function App() {
             <button className="ghost" onClick={() => setPhotos((ps) => ps.map((p) => ({ ...p, selected: false })))}>Kosongkan</button>
             <button className="big sm" disabled={!selected.length} onClick={() => setStep(3)}>Lanjut: Judul & Jadwal →</button>
           </div>
+          {view === 'terpilih' && (
+            <p className="dim curnote">Mode kurasi: ini semua foto yang lolos seleksi. Hilangkan centang pada foto yang kurang sreg — screenshot, struk, uang, atau wajah datar sudah dibuang otomatis.</p>
+          )}
           <div className="grid">
-            {photos.map((p) => (
+            {photos.filter((p) => view === 'semua' || (view === 'terpilih') === p.selected).map((p) => (
               <div key={p.id} className={'card' + (p.selected ? ' sel' : '')}>
                 <div className="imgwrap" onClick={() => setPreview(p)}>
                   {p.thumb ? <img src={p.thumb} alt={p.name} loading="lazy" /> : <div className="noimg">?</div>}
@@ -241,6 +313,9 @@ export default function App() {
                 <div className="cinfo">
                   <label className="pick"><input type="checkbox" checked={p.selected} onChange={() => toggle(p.id)} /> <span className="fname" title={p.path}>{p.name}</span></label>
                   <div className="badges">
+                    {p.flags.screenshot && <em className="bad">screenshot</em>}
+                    {p.flags.dokumen && <em className="bad">struk/dokumen</em>}
+                    {meta[p.id]?.ai && !meta[p.id].ai.layak && <em className="bad">AI: {KATEGORI_LABEL[meta[p.id].ai.kategori] || 'tak layak'}</em>}
                     {p.flags.blur && <em className="bad">blur</em>}
                     {p.flags.gelap && <em className="bad">gelap</em>}
                     {p.flags.terang && <em className="bad">over</em>}
@@ -257,11 +332,36 @@ export default function App() {
       {step === 3 && (
         <section className="panel">
           <h2>Judul & jadwal untuk {selected.length} foto terpilih</h2>
-          <p className="dim">Judul inilah yang tampil sebagai caption di Facebook. Buat yang enak dibaca orang 😊</p>
+          <p className="dim">Judul inilah yang tampil sebagai caption di Facebook. Buat yang enak dibaca orang 😊 Klik ✖ untuk membuang foto dari seleksi.</p>
+
+          <div className="aibar">
+            <b>🤖 Pemeriksaan AI + Auto Caption</b>
+            <p className="dim">AI melihat tiap foto: membuang foto uang, struk/transaksi, produk terlarang, screenshot, atau wajah tanpa ekspresi — lalu menulis caption menarik otomatis. Butuh API key Claude dari <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (biaya ± Rp20–50 per foto). Foto dikirim hanya ke Claude untuk dinilai, tidak disimpan.</p>
+            <div className="fbform">
+              <input type="password" placeholder="API key Claude (sk-ant-...)" value={ai.apiKey} onChange={(e) => setAi({ apiKey: e.target.value })} />
+              <button className="big sm" onClick={runAi} disabled={aiState && !aiState.finished}>🤖 Periksa {selected.length} foto + buat caption</button>
+            </div>
+            {aiState && (
+              <div className="progress">
+                <div className="bar"><div style={{ width: `${(aiState.done / aiState.total) * 100}%` }} /></div>
+                <div className="plabel">{aiState.done}/{aiState.total} diperiksa · {aiState.drop} dibuang</div>
+                {aiState.log.slice(-6).map((l, i) => <p key={i} className={l.ok ? 'ok' : 'err'}>{l.ok ? '✔' : '✖'} {l.name} — {l.msg}</p>)}
+                {aiState.finished && <p className="ok"><b>Selesai.</b> Caption terisi otomatis (bisa kamu edit), foto tak layak sudah dibuang dari seleksi.</p>}
+              </div>
+            )}
+          </div>
+
           <div className="schedrow">
-            <label>Mulai tayang <input type="datetime-local" value={schedBase} onChange={(e) => setSchedBase(e.target.value)} /></label>
-            <label>Jarak antar posting <input type="number" min="1" max="168" value={schedGapH} onChange={(e) => setSchedGapH(+e.target.value || 24)} style={{ width: 60 }} /> jam</label>
-            <button className="ghost" onClick={autoSchedule}>⚡ Isi jadwal otomatis</button>
+            <label>Mulai tanggal <input type="datetime-local" value={schedBase} onChange={(e) => setSchedBase(e.target.value)} /></label>
+            <label>Pola tayang
+              <select value={schedMode} onChange={(e) => setSchedMode(e.target.value)}>
+                {Object.entries(SLOT_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </label>
+            {schedMode === 'gap' && (
+              <label>Jarak <input type="number" min="1" max="168" value={schedGapH} onChange={(e) => setSchedGapH(+e.target.value || 24)} style={{ width: 60 }} /> jam</label>
+            )}
+            <button className="ghost" onClick={autoSchedule}>⚡ Isi jadwal otomatis (jam ramai)</button>
             <button className="big sm" onClick={() => setStep(4)}>Lanjut: Salin ke PC →</button>
           </div>
           <div className="rows">
@@ -269,11 +369,14 @@ export default function App() {
               <div key={p.id} className="row">
                 <img src={p.thumb} alt="" onClick={() => setPreview(p)} />
                 <div className="rmain">
-                  <div className="rname">{pad(i + 1)} · {p.name} <span className={'score inline s' + (p.score >= 75 ? 'g' : 'y')}>{p.score}</span></div>
-                  <input className="judul" placeholder="Tulis judul / caption foto ini…"
+                  <div className="rname">{pad(i + 1)} · {p.name} <span className={'score inline s' + (p.score >= 75 ? 'g' : 'y')}>{p.score}</span>
+                    {meta[p.id]?.ai?.layak && <em className="aiok">🤖 layak</em>}
+                  </div>
+                  <input className="judul" placeholder="Tulis judul / caption foto ini… (atau pakai tombol AI di atas)"
                     value={meta[p.id]?.judul || ''} onChange={(e) => setPhotoMeta(p.id, { judul: e.target.value })} />
                 </div>
                 <input type="datetime-local" value={meta[p.id]?.jadwal || ''} onChange={(e) => setPhotoMeta(p.id, { jadwal: e.target.value })} />
+                <button className="drop" title="Buang dari seleksi" onClick={() => toggle(p.id)}>✖</button>
               </div>
             ))}
           </div>

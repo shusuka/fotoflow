@@ -98,6 +98,37 @@ function colorfulnessScore(data) {
   return { score, c };
 }
 
+// Deteksi screenshot: area datar sempurna (UI), warna sedikit, nama file, rasio layar HP
+function screenshotSignals(data, w, h, file, ow, oh) {
+  let flat = 0, n = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w - 1; x++) {
+      const p = (y * w + x) * 4;
+      if (data[p] === data[p + 4] && data[p + 1] === data[p + 5] && data[p + 2] === data[p + 6]) flat++;
+      n++;
+    }
+  }
+  const flatFrac = flat / n;
+  const nameHit = /screen[-_ ]?shot|screenshot|tangkapan|scrn|capture|\bss[-_ ]/i.test(file.name);
+  const isPng = file.type === 'image/png' || /\.png$/i.test(file.name);
+  const ratio = Math.max(ow, oh) / Math.min(ow, oh);
+  const phoneRatio = ratio > 1.75 && ratio < 2.35; // layar HP modern (16:9 s/d 19.5:9)
+
+  // Foto asli (ada noise sensor) maks ~0.4 area datar sempurna; screenshot UI 0.9+
+  return nameHit
+    || flatFrac > 0.55
+    || (isPng && phoneRatio && flatFrac > 0.35);
+}
+
+// Deteksi dokumen / struk / chat difoto: latar putih dominan, nyaris tanpa warna,
+// dan ada detail teks (kontras halus rapat) — tembok/salju polos tidak kena
+function documentSignals(gray, colorScore, textDetail) {
+  let white = 0;
+  for (let i = 0; i < gray.length; i++) if (gray[i] > 208) white++;
+  const whiteFrac = white / gray.length;
+  return whiteFrac > 0.5 && colorScore < 20 && textDetail > 100;
+}
+
 // dHash untuk deteksi foto mirip (burst / jepretan berulang)
 function dHash(bmp) {
   const w = HASH_SIZE + 1, h = HASH_SIZE;
@@ -134,6 +165,8 @@ export async function analyzePhoto(file) {
     const expo = exposureScore(gray);
     const color = colorfulnessScore(id.data);
     const hash = dHash(bmp);
+    const screenshot = screenshotSignals(id.data, w, h, file, ow, oh);
+    const dokumen = !screenshot && documentSignals(gray, color.score, sharp.variance);
 
     const mp = (ow * oh) / 1e6;
     const resBonus = Math.min(5, mp); // bonus kecil untuk resolusi tinggi
@@ -156,6 +189,8 @@ export async function analyzePhoto(file) {
         gelap: expo.mean < 80,
         terang: expo.bright > 0.06,
         pucat: color.score < 15,
+        screenshot,
+        dokumen,
       },
     };
   } finally {

@@ -59,6 +59,17 @@ button.ghost:hover { border-color: var(--acc); }
 .badges em.bad { background: #3d2026; color: #ff9aa5; }
 .badges em.good { background: #16311f; color: #7ee2a8; }
 
+.tabs { display: flex; gap: 4px; background: var(--panel2); border-radius: 10px; padding: 3px; }
+.tabs button { background: transparent; border: 0; color: var(--dim); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.tabs button.on { background: var(--acc); color: #fff; }
+.curnote { margin: 0 0 12px; }
+
+.aibar { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 14px 0; }
+.aibar p { margin: 6px 0 10px; font-size: 13px; }
+.aiok { font-style: normal; font-size: 11px; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: #16311f; color: #7ee2a8; }
+button.drop { background: transparent; border: 1px solid var(--line); color: var(--bad); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+button.drop:hover { border-color: var(--bad); background: #3d2026; }
+
 .schedrow { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 14px 0; }
 .schedrow label { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 13px; }
 input, select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
