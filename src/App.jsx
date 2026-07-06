@@ -353,9 +353,12 @@ export default function App() {
 
           <div className="aibar">
             <b>🤖 Pemeriksaan AI + Auto Caption</b>
-            <p className="dim">AI melihat tiap foto: membuang foto uang, struk/transaksi, produk terlarang, screenshot, atau wajah tanpa ekspresi — lalu menulis caption menarik otomatis. Butuh API key Claude dari <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (biaya ± Rp20–50 per foto). Foto dikirim hanya ke Claude untuk dinilai, tidak disimpan.</p>
+            <p className="dim">AI melihat tiap foto: membuang foto uang, struk/transaksi, produk terlarang, screenshot, atau wajah tanpa ekspresi — lalu menulis caption menarik otomatis. Pakai salah satu API key (dideteksi otomatis):
+              {' '}<b>Gemini</b> dari <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com</a> (key <code>AIza...</code>, ada kuota gratis) atau
+              {' '}<b>Claude</b> dari <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (key <code>sk-ant-...</code>, ± Rp20–50/foto).
+              Foto dikirim hanya untuk dinilai, tidak disimpan.</p>
             <div className="fbform">
-              <input type="password" placeholder="API key Claude (sk-ant-...)" value={ai.apiKey} onChange={(e) => setAi({ apiKey: e.target.value })} />
+              <input type="password" placeholder="API key Gemini (AIza...) atau Claude (sk-ant-...)" value={ai.apiKey} onChange={(e) => setAi({ apiKey: e.target.value })} />
               <button className="big sm" onClick={runAi} disabled={aiState && !aiState.finished}>🤖 Periksa {selected.length} foto + buat caption</button>
             </div>
             {aiState && (

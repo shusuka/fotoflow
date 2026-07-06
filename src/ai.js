@@ -1,10 +1,14 @@
-// FotoFlow — pemeriksaan AI (Claude vision) + auto caption
+// FotoFlow — pemeriksaan AI (vision) + auto caption
 // Menyaring foto yang tidak layak posting: uang, struk/transaksi, produk ilegal,
 // screenshot, wajah tanpa ekspresi — dan membuat caption menarik untuk yang layak.
-// Butuh API key Claude (console.anthropic.com). Berjalan langsung dari browser.
+// Mendukung 2 penyedia, dideteksi otomatis dari bentuk API key:
+//   - Claude  (console.anthropic.com, key "sk-ant-...")
+//   - Gemini  (aistudio.google.com,   key "AIza...") — ada kuota gratis
+// Berjalan langsung dari browser.
 
-const API = 'https://api.anthropic.com/v1/messages'
-const MODEL = 'claude-haiku-4-5-20251001' // cepat & murah, cukup untuk kurasi foto
+const CLAUDE_API = 'https://api.anthropic.com/v1/messages'
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001' // cepat & murah, cukup untuk kurasi foto
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'] // coba berurutan
 
 const PROMPT = `Kamu kurator foto untuk halaman Facebook yang ingin semua postingannya ENAK DILIHAT dan menarik perhatian orang.
 
@@ -37,18 +41,35 @@ async function fileToJpegBase64(file, maxSide = 896) {
   return btoa(bin)
 }
 
-export async function aiReviewPhoto({ apiKey, file }) {
-  const data = await fileToJpegBase64(file)
-  const res = await fetch(API, {
+// Bersihkan key dari karakter tersembunyi hasil copy-paste (spasi, zero-width, dsb.)
+// — header fetch hanya menerima ASCII, karakter aneh bikin error "non ISO-8859-1".
+function cleanKey(apiKey) {
+  return (apiKey || '').replace(/[^\x21-\x7E]/g, '')
+}
+
+function parseVerdict(text) {
+  const m = text.match(/\{[\s\S]*\}/)
+  if (!m) throw new Error('Jawaban AI tidak terbaca')
+  const out = JSON.parse(m[0])
+  return {
+    layak: !!out.layak,
+    kategori: out.kategori || (out.layak ? 'oke' : 'membosankan'),
+    alasan: out.alasan || '',
+    caption: out.caption || '',
+  }
+}
+
+async function claudeReview(key, data) {
+  const res = await fetch(CLAUDE_API, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
+      'x-api-key': key,
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: CLAUDE_MODEL,
       max_tokens: 400,
       messages: [{
         role: 'user',
@@ -61,16 +82,48 @@ export async function aiReviewPhoto({ apiKey, file }) {
   })
   const j = await res.json()
   if (j.error) throw new Error(j.error.message)
-  const text = j.content?.map((c) => c.text || '').join('') || ''
-  const m = text.match(/\{[\s\S]*\}/)
-  if (!m) throw new Error('Jawaban AI tidak terbaca')
-  const out = JSON.parse(m[0])
-  return {
-    layak: !!out.layak,
-    kategori: out.kategori || (out.layak ? 'oke' : 'membosankan'),
-    alasan: out.alasan || '',
-    caption: out.caption || '',
+  return parseVerdict(j.content?.map((c) => c.text || '').join('') || '')
+}
+
+async function geminiReview(key, data) {
+  let lastErr
+  for (const model of GEMINI_MODELS) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: 'image/jpeg', data } },
+              { text: PROMPT },
+            ],
+          }],
+          generationConfig: { temperature: 0.4, maxOutputTokens: 500 },
+        }),
+      },
+    )
+    const j = await res.json()
+    if (j.error) {
+      lastErr = new Error(j.error.message)
+      // model belum tersedia untuk key ini → coba model berikutnya
+      if (res.status === 404 || /not\s*found|NOT_FOUND/i.test(j.error.message || '')) continue
+      throw lastErr
+    }
+    const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || ''
+    return parseVerdict(text)
   }
+  throw lastErr || new Error('Model Gemini tidak tersedia untuk key ini')
+}
+
+export async function aiReviewPhoto({ apiKey, file }) {
+  const key = cleanKey(apiKey)
+  if (!key) throw new Error('API key kosong')
+  const data = await fileToJpegBase64(file)
+  if (key.startsWith('AIza')) return geminiReview(key, data)
+  if (key.startsWith('sk-ant')) return claudeReview(key, data)
+  throw new Error('API key tidak dikenali — pakai key Claude (sk-ant-...) atau Gemini (AIza...)')
 }
 
 export const KATEGORI_LABEL = {
