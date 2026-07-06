@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { analyzePhoto, groupSimilar, IMAGE_EXT } from './scoring.js'
 import { fbCheckToken, fbSchedulePhoto } from './fb.js'
 import { aiReviewPhoto, KATEGORI_LABEL } from './ai.js'
+import { isEdited, renderEditedBlob } from './editor.js'
+import Editor from './Editor.jsx'
 
 const LS_FB = 'fotoflow_fb'
 const LS_AI = 'fotoflow_ai'
@@ -62,6 +64,7 @@ export default function App() {
   const [view, setView] = useState('semua')
   const [ai, setAi] = useState(() => { try { return JSON.parse(localStorage.getItem(LS_AI)) || { apiKey: '' } } catch { return { apiKey: '' } } })
   const [aiState, setAiState] = useState(null)
+  const [editing, setEditing] = useState(null)
   const cancelRef = useRef(false)
 
   const supported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
@@ -186,13 +189,15 @@ export default function App() {
       const p = selected[i]
       try {
         const file = await p.handle.getFile()
-        const outName = `${pad(i + 1)}_${p.name}`
+        const edited = isEdited(meta[p.id]?.edit)
+        const outName = `${pad(i + 1)}_${edited ? p.name.replace(/\.\w+$/, '') + '_edit.jpg' : p.name}`
         const fh = await out.getFileHandle(outName, { create: true })
         const w = await fh.createWritable()
-        await w.write(file) // salinan byte asli, tanpa kompres ulang
+        // foto tanpa edit = salinan byte asli; foto diedit = render JPEG kualitas tinggi
+        await w.write(edited ? await renderEditedBlob(file, meta[p.id].edit) : file)
         await w.close()
         manifest.push({
-          file: outName, asli: p.path, skor: p.score,
+          file: outName, asli: p.path, skor: p.score, diedit: edited,
           judul: meta[p.id]?.judul || '', jadwal: meta[p.id]?.jadwal || '',
           ai: meta[p.id]?.ai ? { kategori: meta[p.id].ai.kategori, alasan: meta[p.id].ai.alasan } : null,
           ketajaman: p.sharpness, eksposur: p.exposure, warna: p.color,
@@ -230,7 +235,11 @@ export default function App() {
     for (let i = 0; i < list.length; i++) {
       const p = list[i]
       try {
-        const file = await p.handle.getFile()
+        let file = await p.handle.getFile()
+        if (isEdited(meta[p.id]?.edit)) {
+          const blob = await renderEditedBlob(file, meta[p.id].edit)
+          file = new File([blob], p.name.replace(/\.\w+$/, '') + '_edit.jpg', { type: 'image/jpeg' })
+        }
         await fbSchedulePhoto({
           pageId: fb.pageId.trim(), token: fb.token.trim(), file,
           caption: meta[p.id]?.judul || '', publishAt: new Date(meta[p.id].jadwal),
@@ -249,8 +258,9 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <div className="logo">📸 <b>FotoFlow</b> <span className="tag">sortir foto otomatis ala fotografer</span></div>
+        <div className="logo" onClick={() => setStep(1)} style={{ cursor: 'pointer' }} title="Kembali ke menu utama">📸 <b>FotoFlow</b> <span className="tag">sortir foto otomatis ala fotografer</span></div>
         <nav className="steps">
+          <button className="homebtn" onClick={() => setStep(1)} title="Kembali ke menu utama">🏠 Home</button>
           {steps.map((s, i) => (
             <button key={s} className={step === i + 1 ? 'on' : ''} disabled={i + 1 > 2 && !photos.length}
               onClick={() => setStep(i + 1)}>{i + 1}. {s}</button>
@@ -277,7 +287,14 @@ export default function App() {
             </div>
           )}
           {!!photos.length && !progress && (
-            <p className="ok">✔ {photos.length} foto dari folder <b>{folderName}</b> sudah dianalisis. Lanjut ke langkah 2.</p>
+            <>
+              <p className="ok">✔ {photos.length} foto dari folder <b>{folderName}</b> sudah dianalisis. Lanjut ke langkah 2.</p>
+              <div className="homemenu">
+                <button className="ghost" onClick={() => setStep(2)}>📊 Lihat hasil sortir ({selected.length} terpilih)</button>
+                <button className="ghost" onClick={() => setStep(3)}>✏️ Judul, edit & jadwal</button>
+                <button className="ghost" onClick={() => { setPhotos([]); setFolderName('') }}>🔄 Mulai ulang</button>
+              </div>
+            </>
           )}
         </section>
       )}
@@ -371,11 +388,13 @@ export default function App() {
                 <div className="rmain">
                   <div className="rname">{pad(i + 1)} · {p.name} <span className={'score inline s' + (p.score >= 75 ? 'g' : 'y')}>{p.score}</span>
                     {meta[p.id]?.ai?.layak && <em className="aiok">🤖 layak</em>}
+                    {isEdited(meta[p.id]?.edit) && <em className="aiok">🎨 diedit</em>}
                   </div>
                   <input className="judul" placeholder="Tulis judul / caption foto ini… (atau pakai tombol AI di atas)"
                     value={meta[p.id]?.judul || ''} onChange={(e) => setPhotoMeta(p.id, { judul: e.target.value })} />
                 </div>
                 <input type="datetime-local" value={meta[p.id]?.jadwal || ''} onChange={(e) => setPhotoMeta(p.id, { jadwal: e.target.value })} />
+                <button className="editbtn" title="Edit warna & kecerahan" onClick={() => setEditing(p)}>🎨</button>
                 <button className="drop" title="Buang dari seleksi" onClick={() => toggle(p.id)}>✖</button>
               </div>
             ))}
@@ -386,7 +405,8 @@ export default function App() {
       {step === 4 && (
         <section className="panel center">
           <h2>Salin {selected.length} foto terpilih ke folder output</h2>
-          <p>File disalin <b>persis seperti aslinya</b> (tanpa kompres ulang), diberi nomor urut,
+          <p>Foto tanpa edit disalin <b>persis seperti aslinya</b> (tanpa kompres ulang); foto yang kamu edit 🎨
+            dirender sebagai JPEG kualitas tinggi (file asli di folder sumber tetap utuh). Semua diberi nomor urut,
             dan datanya (judul, jadwal, skor) disimpan terpisah di <code>fotoflow-data.json</code>.</p>
           <button className="big" onClick={copyToOutput} disabled={!selected.length || (copyState && !copyState.finished)}>📁 Pilih Folder Output & Salin</button>
           {copyState && (
@@ -431,6 +451,23 @@ export default function App() {
             </div>
           )}
         </section>
+      )}
+
+      {editing && (
+        <Editor
+          photo={editing}
+          initial={meta[editing.id]?.edit}
+          onClose={() => setEditing(null)}
+          onSave={(e) => { setPhotoMeta(editing.id, { edit: e }); setEditing(null) }}
+          onSaveAll={(e) => {
+            setMeta((m) => {
+              const next = { ...m }
+              for (const p of selected) next[p.id] = { ...(next[p.id] || {}), edit: e }
+              return next
+            })
+            setEditing(null)
+          }}
+        />
       )}
 
       {preview && (

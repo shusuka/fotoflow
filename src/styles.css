@@ -86,6 +86,30 @@ input[type="range"] { padding: 0; }
 .fbform { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
 .fbform input { min-width: 220px; }
 
+.homebtn { background: var(--panel2) !important; color: var(--text) !important; border-color: var(--acc) !important; }
+.homemenu { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+button.editbtn { background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+button.editbtn:hover { border-color: var(--acc); background: var(--panel2); }
+
+/* Editor foto */
+.editor { position: fixed; inset: 0; background: rgba(8, 10, 14, .96); z-index: 60; display: flex; gap: 0; }
+.ecanvas { flex: 1; display: grid; place-items: center; position: relative; padding: 20px; min-width: 0; }
+.ecanvas canvas { max-width: 100%; max-height: calc(100vh - 80px); border-radius: 10px; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+.eloading { position: absolute; color: var(--dim); }
+.ename { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; color: var(--dim); font-size: 12px; }
+.epanel { width: 320px; background: var(--panel); border-left: 1px solid var(--line); padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.epanel h3 { margin: 0; }
+.wide { width: 100%; }
+.presets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.presets button { font-size: 12px; padding: 7px 6px; }
+.sliders { display: flex; flex-direction: column; gap: 8px; }
+.sliders label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--dim); }
+.sliders label b { color: var(--text); }
+.sliders input[type="range"] { width: 100%; }
+.eactions { display: flex; gap: 8px; justify-content: space-between; }
+.enote { font-size: 12px; margin: 0; }
+@media (max-width: 760px) { .editor { flex-direction: column; } .epanel { width: auto; border-left: 0; border-top: 1px solid var(--line); } }
+
 .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: grid; place-items: center; z-index: 50; cursor: zoom-out; }
 .lightbox img { max-width: 92vw; max-height: 78vh; border-radius: 10px; }
 .ldetail { margin-top: 12px; text-align: center; color: var(--dim); }
