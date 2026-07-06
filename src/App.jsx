@@ -428,8 +428,20 @@ export default function App() {
         <section className="panel">
           <h2>Upload terjadwal ke Facebook Page</h2>
           <p className="dim">Penjadwalan hanya bisa untuk <b>Halaman (Page)</b>, bukan profil pribadi — ini aturan Facebook.
-            Buat token di <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noreferrer">Graph API Explorer</a> dengan
-            izin <code>pages_manage_posts</code>. Jadwal minimal 10 menit & maksimal 75 hari ke depan.</p>
+            Jadwal minimal 10 menit & maksimal 75 hari ke depan.</p>
+          <details className="guide">
+            <summary>📖 Panduan lengkap: cara dapat Page ID & Access Token (±5 menit)</summary>
+            <ol>
+              <li>Belum punya Page? Buat dulu di <a href="https://www.facebook.com/pages/create" target="_blank" rel="noreferrer">facebook.com/pages/create</a>.</li>
+              <li>Daftar akun developer di <a href="https://developers.facebook.com" target="_blank" rel="noreferrer">developers.facebook.com</a> (login dengan akun admin Page kamu).</li>
+              <li><b>My Apps → Create App</b> → tipe <b>Business</b> → beri nama bebas, misal "FotoFlow".</li>
+              <li>Buka <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noreferrer">Graph API Explorer</a> → pilih App tadi → <b>Add Permissions</b>: <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code> → <b>Generate Access Token</b> → izinkan & pilih Page kamu.</li>
+              <li>Di dropdown <b>User or Page</b>, ganti ke <b>nama Page kamu</b> → token yang tampil = Page Access Token. Salin ke kolom di bawah.</li>
+              <li>Masih di Explorer, jalankan <code>me?fields=id,name</code> → <code>id</code> = Page ID. Salin juga.</li>
+              <li>Klik <b>Tes koneksi</b> di bawah. Kalau ✔, langsung bisa 🚀 Jadwalkan.</li>
+            </ol>
+            <p className="dim">Token kedaluwarsa 1–2 jam? Tidak masalah — token hanya perlu hidup saat kamu klik "Jadwalkan". Setelah itu Facebook sendiri yang menayangkan sesuai jadwal. Kalau expired, tinggal generate ulang di Graph Explorer. App boleh tetap Development Mode karena hanya kamu (admin) yang memakainya. Cek antrian di Meta Business Suite → Planner.</p>
+          </details>
           <div className="fbform">
             <input placeholder="Page ID" value={fb.pageId} onChange={(e) => setFb({ ...fb, pageId: e.target.value })} />
             <input placeholder="Page Access Token" type="password" value={fb.token} onChange={(e) => setFb({ ...fb, token: e.target.value })} />
